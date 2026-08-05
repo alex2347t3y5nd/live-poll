@@ -1,0 +1,152 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=yes">
+  <title>Голосование</title>
+  <style>
+    @import url('https://fonts.googleapis.com/css2?family=Manrope:wght@400;600;700;800&display=swap');
+    :root { --brand:#6857f5; --ink:#17203b; --muted:#747d98; --line:#e8e9f0; }
+    * { box-sizing:border-box; }
+    body { font-family:'Manrope',Arial,sans-serif; margin:0; min-height:100vh; padding:32px 18px; text-align:center; color:var(--ink); background:radial-gradient(circle at top left,#473bad,transparent 38%),radial-gradient(circle at bottom right,#146f76,transparent 36%),#11162d; display:flex; flex-direction:column; align-items:center; justify-content:center; }
+    body > h2 { color:white; font-size:14px; letter-spacing:.12em; text-transform:uppercase; margin:0 0 18px; opacity:.82; }
+    #question-box, #waiting, #thankyou { width:min(520px,100%); background:rgba(255,255,255,.97); padding:clamp(28px,7vw,48px); border-radius:28px; box-shadow:0 28px 70px rgba(0,0,0,.3); border:1px solid rgba(255,255,255,.6); }
+    #question-box { margin:0; }
+    #q-text { margin:0 0 28px; font-size:clamp(24px,6vw,34px); line-height:1.18; letter-spacing:-.03em; }
+    .option-btn {
+      display:block; width:100%; margin:12px auto; padding:17px 18px; font:700 16px 'Manrope'; color:var(--ink); background:#f7f7fb; border:1px solid var(--line); border-radius:15px; cursor:pointer; transition:.2s ease;
+    }
+    .option-btn:hover { transform:translateY(-2px); border-color:var(--brand); background:#f0eeff; box-shadow:0 8px 18px rgba(104,87,245,.12); }
+    .option-btn:active { transform:scale(.98); }
+    #wordcloud-input-area { margin: 20px 0; }
+    #wordInput {
+      padding:16px; font:600 16px 'Manrope'; width:100%; border:1px solid var(--line); border-radius:14px; outline:none; transition:.2s;
+    }
+    #submitWordBtn {
+      display:block; width:100%; margin:12px auto; padding:16px 30px; font:700 16px 'Manrope'; background:linear-gradient(135deg,var(--brand),#8778ff); color:white; border:none; border-radius:14px; cursor:pointer; box-shadow:0 12px 24px rgba(104,87,245,.25);
+    }
+    #wordInput:focus { border-color:var(--brand); box-shadow:0 0 0 4px rgba(104,87,245,.12); }
+    #popular-words { margin-top:30px; border-top:1px solid var(--line); padding-top:24px; }
+    #popular-words h4 { color:var(--muted); font-size:13px; line-height:1.5; }
+    .word-chip {
+      display: inline-block; margin: 5px; padding: 8px 16px;
+      background:#f0eeff; color:#4d42b2; border:1px solid #dcd7ff; border-radius:999px; cursor:pointer; font-size:.95em; font-weight:700; transition:all .2s;
+    }
+    .word-chip:active { background:#dfdbff; transform:scale(.95); }
+    #thankyou { display:none; font-size:1.35em; font-weight:800; color:#229b7d; margin:0; }
+    #waiting { font-size:1.1em; color:var(--muted); margin:0; }
+    #waiting::before { content:''; display:block; width:44px; height:44px; margin:0 auto 20px; border:5px solid #e6e3ff; border-top-color:var(--brand); border-radius:50%; animation:spin 1s linear infinite; }
+    @keyframes spin { to { transform:rotate(360deg); } }
+  </style>
+</head>
+<body>
+  <h2>📱 Ваше мнение важно!</h2>
+  <div id="waiting"><p>Ожидайте вопрос от ведущего...</p></div>
+  <div id="question-box" style="display: none;">
+    <h3 id="q-text"></h3>
+    <div id="options-container"></div>
+    <div id="wordcloud-input-area" style="display: none;">
+      <input type="text" id="wordInput" placeholder="Введите свой вариант..." maxlength="30">
+      <button id="submitWordBtn" onclick="submitWord()">Отправить</button>
+    </div>
+    <div id="popular-words" style="display: none;">
+      <h4>Популярные ответы (нажмите, чтобы присоединиться):</h4>
+      <div id="popular-words-list"></div>
+    </div>
+  </div>
+  <div id="thankyou">✅ Спасибо за ваш ответ!</div>
+
+  <script>
+    const urlParams = new URLSearchParams(window.location.search);
+    const sessionCode = urlParams.get('session');
+    if (!sessionCode) throw new Error('No session code');
+    const BASE_URL = window.location.origin;
+    let ws, currentQuestion = null, hasVoted = false;
+
+    fetch(`${BASE_URL}/api/session/${sessionCode}`)
+      .then(res => res.json())
+      .then(data => {
+        if (data.activeQuestion) showQuestion(data.activeQuestion, data.wordcloud);
+        else connectWebSocket();
+      });
+
+    function connectWebSocket() {
+      const socketProtocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
+      ws = new WebSocket(`${socketProtocol}//${location.host}/ws?role=participant&session=${sessionCode}`);
+      ws.onclose = () => { if (!hasVoted) setTimeout(connectWebSocket, 2000); };
+      ws.onmessage = (event) => {
+        const msg = JSON.parse(event.data);
+        if (msg.type === 'new_question') { hasVoted = false; showQuestion(msg.question, null); }
+        else if (msg.type === 'wordcloud_update' && msg.questionId === currentQuestion?.id) updatePopularWords(msg.words);
+      };
+    }
+
+    function showQuestion(question, wordcloudData) {
+      currentQuestion = question;
+      document.getElementById('waiting').style.display = 'none';
+      document.getElementById('question-box').style.display = 'block';
+      document.getElementById('thankyou').style.display = 'none';
+      document.getElementById('q-text').textContent = question.question;
+      if (question.type === 'choice') {
+        document.getElementById('options-container').style.display = 'block';
+        document.getElementById('wordcloud-input-area').style.display = 'none';
+        document.getElementById('popular-words').style.display = 'none';
+        const container = document.getElementById('options-container');
+        container.innerHTML = '';
+        question.options.forEach(opt => {
+          const btn = document.createElement('button');
+          btn.className = 'option-btn'; btn.textContent = opt;
+          btn.onclick = () => submitChoice(question.id, opt);
+          container.appendChild(btn);
+        });
+      } else if (question.type === 'wordcloud') {
+        document.getElementById('options-container').style.display = 'none';
+        document.getElementById('wordcloud-input-area').style.display = 'block';
+        document.getElementById('popular-words').style.display = 'block';
+        document.getElementById('wordInput').value = '';
+        updatePopularWords(wordcloudData);
+      }
+    }
+
+    function updatePopularWords(words) {
+      if (!words || Object.keys(words).length === 0) {
+        document.getElementById('popular-words-list').innerHTML = '<p style="color:#888;">Пока нет ответов. Будьте первым!</p>';
+        return;
+      }
+      const entries = Object.entries(words).sort((a, b) => b[1] - a[1]).slice(0, 15);
+      document.getElementById('popular-words-list').innerHTML = entries.map(([word, count]) => {
+        const size = 0.8 + (count / entries[0][1]) * 0.5;
+        return `<span class="word-chip" style="font-size:${size}em;" onclick="submitWord('${word.replace(/'/g, "\\'")}')">${word} (${count})</span>`;
+      }).join('');
+    }
+
+    async function submitChoice(questionId, option) {
+      if (hasVoted) return;
+      hasVoted = true;
+      document.querySelectorAll('.option-btn').forEach(b => b.disabled = true);
+      await fetch(`${BASE_URL}/api/answer`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ code: sessionCode, questionId, option }) });
+      document.getElementById('question-box').style.display = 'none';
+      document.getElementById('thankyou').style.display = 'block';
+      if (ws) ws.close();
+    }
+
+    async function submitWord(presetWord) {
+      if (hasVoted) return;
+      const word = presetWord || document.getElementById('wordInput').value.trim();
+      if (!word) return;
+      hasVoted = true;
+      document.getElementById('submitWordBtn').disabled = true;
+      document.getElementById('wordInput').disabled = true;
+      document.querySelectorAll('.word-chip').forEach(chip => chip.style.pointerEvents = 'none');
+      await fetch(`${BASE_URL}/api/answer`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ code: sessionCode, questionId: currentQuestion.id, option: word }) });
+      document.getElementById('question-box').style.display = 'none';
+      document.getElementById('thankyou').style.display = 'block';
+      if (ws) ws.close();
+    }
+
+    document.addEventListener('keypress', (e) => {
+      if (e.key === 'Enter' && document.getElementById('wordcloud-input-area').style.display === 'block') submitWord();
+    });
+  </script>
+</body>
+</html>

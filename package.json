@@ -1,0 +1,18 @@
+{
+  "name": "opros",
+  "version": "1.0.0",
+  "description": "Сервис интерактивных опросов в реальном времени для встреч и мероприятий",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "node --watch server.js"
+  },
+  "keywords": ["poll", "realtime", "websocket", "wordcloud", "presentation"],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs",
+  "dependencies": {
+    "express": "^5.2.1",
+    "ws": "^8.21.2"
+  }
+}

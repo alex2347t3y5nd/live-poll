@@ -1,0 +1,117 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Демонстрация опроса</title>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+  <style>
+    @import url('https://fonts.googleapis.com/css2?family=Manrope:wght@400;600;700;800&display=swap');
+    :root { --ink:#17203b; --muted:#6f7895; --brand:#6857f5; --accent:#34d6b0; --panel:rgba(255,255,255,.96); }
+    * { margin:0; padding:0; box-sizing:border-box; }
+    body { font-family:'Manrope',Arial,sans-serif; background:radial-gradient(circle at 12% 15%,#4237a0 0,transparent 32%),radial-gradient(circle at 88% 85%,#176f78 0,transparent 30%),#11162d; display:flex; align-items:center; justify-content:center; min-height:100vh; padding:clamp(24px,4vw,64px); text-align:center; color:var(--ink); }
+    body::before { content:''; position:fixed; inset:0; pointer-events:none; background-image:linear-gradient(rgba(255,255,255,.035) 1px,transparent 1px),linear-gradient(90deg,rgba(255,255,255,.035) 1px,transparent 1px); background-size:48px 48px; }
+    #content { position:relative; width:min(1120px,100%); min-height:min(720px,82vh); padding:clamp(32px,6vw,76px); border:1px solid rgba(255,255,255,.5); border-radius:32px; background:var(--panel); box-shadow:0 32px 90px rgba(0,0,0,.32); display:flex; flex-direction:column; align-items:center; justify-content:center; overflow:hidden; }
+    #content::before { content:'LIVE • РЕЗУЛЬТАТЫ ОПРОСА'; position:absolute; left:36px; top:28px; font-size:12px; letter-spacing:.16em; font-weight:800; color:var(--brand); }
+    #question-text { font-size:clamp(32px,4.2vw,60px); line-height:1.12; font-weight:800; margin:28px auto 46px; max-width:980px; letter-spacing:-.04em; }
+    #chart-container { width:92%; max-width:920px; margin:0 auto; }
+    #wordcloud-container { display:flex; flex-wrap:wrap; justify-content:center; align-items:center; align-content:center; gap:12px; min-height:320px; width:96%; margin:10px auto; }
+    .word-item { margin:0; padding:10px 20px; background:linear-gradient(135deg,#eeecff,#e8fbf6); border:1px solid rgba(104,87,245,.14); border-radius:999px; font-weight:700; color:#3b3297; box-shadow:0 8px 22px rgba(50,42,120,.08); transition:transform .25s ease; }
+    .word-item:hover { transform:translateY(-3px); }
+    #waiting-message { font-size:clamp(24px,3vw,42px); font-weight:700; color:var(--ink); }
+    #waiting-message::before { content:''; display:block; width:60px; height:60px; margin:0 auto 28px; border:6px solid #e4e1ff; border-top-color:var(--brand); border-radius:50%; animation:spin 1s linear infinite; }
+    @keyframes spin { to { transform:rotate(360deg); } }
+    @media (max-width:700px) { #content { min-height:78vh; border-radius:24px; } #content::before { left:24px; top:22px; } #question-text { margin-top:36px; } }
+  </style>
+</head>
+<body>
+  <div id="content"><div id="waiting-message">Ожидайте вопрос от ведущего...</div></div>
+  <script>
+    const urlParams = new URLSearchParams(window.location.search);
+    const sessionCode = urlParams.get('session');
+    if (!sessionCode) document.body.innerHTML = '<h1 style="color:red;text-align:center;margin-top:50px;">Ошибка: не указан код сессии</h1>';
+    const BASE_URL = window.location.origin;
+    let chart = null, currentQuestionType = null, ws;
+
+    function connectDisplay() {
+      const socketProtocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
+      ws = new WebSocket(`${socketProtocol}//${location.host}/ws?role=display&session=${sessionCode}`);
+      ws.onmessage = (event) => {
+        const msg = JSON.parse(event.data);
+        if (msg.type === 'display_question') showQuestion(msg.question, msg.results);
+        else if (msg.type === 'display_results') updateResults(msg.results, msg.questionType);
+      };
+      ws.onclose = () => setTimeout(connectDisplay, 2000);
+    }
+
+    async function loadCurrentQuestion() {
+      try {
+        const res = await fetch(`${BASE_URL}/api/session/${sessionCode}`);
+        const data = await res.json();
+        if (data.activeQuestion) {
+          const historyRes = await fetch(`${BASE_URL}/api/session/${sessionCode}/history`);
+          const historyData = await historyRes.json();
+          const currentQuestion = historyData.questions.find(q => q.id === data.activeQuestion.id);
+          showQuestion(data.activeQuestion, currentQuestion ? currentQuestion.answers : {});
+        }
+      } catch (err) { console.error('Не удалось загрузить вопрос:', err); }
+    }
+
+    function showQuestion(question, results = {}) {
+      currentQuestionType = question.type;
+      document.getElementById('content').innerHTML = `
+        <div id="question-text">${question.question}</div>
+        ${question.type === 'choice' ? '<div id="chart-container"><canvas id="chart"></canvas></div>' : ''}
+        ${question.type === 'wordcloud' ? '<div id="wordcloud-container"></div>' : ''}
+      `;
+      if (question.type === 'choice') renderChoiceChart(question.options || Object.keys(results), results);
+      else if (question.type === 'wordcloud') renderWordCloud(results);
+    }
+
+    function renderChoiceChart(labels, results) {
+      const ctx = document.getElementById('chart').getContext('2d');
+      if (chart) chart.destroy();
+      chart = new Chart(ctx, {
+        type: 'bar',
+        data: {
+          labels: labels,
+          datasets: [{
+            label: 'Голоса', data: labels.map(label => results[label] || 0),
+            backgroundColor: ['#6857f5','#34d6b0','#ffb45c','#ff6f91','#6074f7'],
+            borderColor: 'transparent', borderWidth: 0, borderRadius: 10, borderSkipped: false
+          }]
+        },
+        options: {
+          responsive: true, maintainAspectRatio: true,
+          scales: { y: { beginAtZero: true, grid: { color: '#e9eaf1' }, border: { display:false }, ticks: { stepSize: 1, font: { size: 15, family:'Manrope' }, color:'#6f7895' } }, x: { grid: { display:false }, border: { display:false }, ticks: { font: { size: 15, family:'Manrope', weight:600 }, color:'#17203b' } } },
+          plugins: { legend: { display: false } }
+        }
+      });
+    }
+
+    function renderWordCloud(words) {
+      const container = document.getElementById('wordcloud-container');
+      if (!words || Object.keys(words).length === 0) {
+        container.innerHTML = '<p style="font-size:1.5em;color:#888;">Пока нет ответов</p>'; return;
+      }
+      const entries = Object.entries(words).sort((a, b) => b[1] - a[1]);
+      const maxCount = entries[0][1];
+      container.innerHTML = entries.map(([word, count]) => {
+        const size = 16 + Math.floor((count / maxCount) * 48);
+        const opacity = 0.6 + (count / maxCount) * 0.4;
+        return `<span class="word-item" style="font-size:${size}px; opacity:${opacity};">${word} (${count})</span>`;
+      }).join('');
+    }
+
+    function updateResults(results, questionType) {
+      if (questionType === 'choice' && chart) {
+        const labels = chart.data.labels;
+        chart.data.datasets[0].data = labels.map(label => results[label] || 0);
+        chart.update();
+      } else if (questionType === 'wordcloud') renderWordCloud(results);
+    }
+
+    loadCurrentQuestion().then(() => connectDisplay());
+  </script>
+</body>
+</html>

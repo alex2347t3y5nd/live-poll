@@ -1,0 +1,294 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8">
+  <title>Панель ведущего – Голосовалка</title>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/qrcode@1.5.1/build/qrcode.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+  <style>
+    @import url('https://fonts.googleapis.com/css2?family=Manrope:wght@400;600;700;800&display=swap');
+    :root { --brand:#6857f5; --ink:#17203b; --muted:#747d98; --line:#e6e8f0; --bg:#f3f4f8; }
+    * { box-sizing:border-box; }
+    body { font-family:'Manrope',Arial,sans-serif; max-width:1180px; margin:0 auto; padding:42px 24px 80px; text-align:left; color:var(--ink); background:var(--bg); min-height:100vh; }
+    body > h1 { margin:0 0 28px; font-size:clamp(28px,4vw,44px); letter-spacing:-.04em; }
+    body > h1::after { content:'Управляйте сессией и следите за ответами в реальном времени'; display:block; margin-top:8px; color:var(--muted); font-size:15px; font-weight:500; letter-spacing:0; }
+    #setup, #question-form, #results { background:white; border:1px solid var(--line); border-radius:24px; padding:28px; box-shadow:0 14px 36px rgba(25,31,57,.06); }
+    #setup { float:left; width:34%; text-align:center; position:sticky; top:24px; }
+    #question-form, #results { width:calc(66% - 22px); margin-left:calc(34% + 22px); }
+    #qrcode { margin:16px auto; display:block; padding:12px; background:white; border:1px solid var(--line); border-radius:18px; }
+    #codeDisplay { display:inline-block; color:var(--brand); font-size:28px; letter-spacing:.12em; margin-left:5px; }
+    #joinLink { display:block; color:var(--brand); font-size:12px; word-break:break-all; margin-top:8px; }
+    input, button, select { font:600 15px 'Manrope'; }
+    input, select { width:100%; padding:15px 16px; margin:6px 0; color:var(--ink); background:#f8f8fb; border:1px solid var(--line); border-radius:13px; outline:none; }
+    input:focus, select:focus { border-color:var(--brand); box-shadow:0 0 0 4px rgba(104,87,245,.1); background:white; }
+    button { padding:14px 20px; margin:8px 6px 0 0; border:0; border-radius:13px; cursor:pointer; font-weight:700; transition:.2s; }
+    button[onclick="createQuestion()"] { color:white; background:linear-gradient(135deg,var(--brand),#8778ff); box-shadow:0 10px 22px rgba(104,87,245,.23); }
+    button:hover { transform:translateY(-2px); }
+    #question-form { margin-top:0; }
+    #question-form h3 { font-size:22px; margin:0 0 18px; }
+    #results { margin-top:22px; }
+    #activeQuestionTitle { margin-top:0; font-size:24px; }
+    #wordcloud-container {
+      display: flex; flex-wrap: wrap; justify-content: center; align-items: center;
+      min-height:220px; border:1px dashed #cfd2df; border-radius:18px; padding:24px; margin:20px 0; background:#fafafd;
+    }
+    .wordcloud-item {
+      margin:5px; padding:7px 14px; color:#4b40aa; background:#eeecff; border:1px solid #ded9ff; border-radius:999px;
+      display: inline-block; transition: all 0.3s;
+    }
+    .hidden { display: none; }
+    .export-btn {
+      background:#183c37; color:white; border:none; padding:14px 22px; font-size:15px; border-radius:13px; cursor:pointer; margin:22px 0 0 calc(34% + 22px);
+    }
+    .new-question-btn {
+      background:#eeecff; color:#4b40aa; border:none; padding:12px 18px; font-size:14px; border-radius:12px; cursor:pointer;
+    }
+    .display-link-btn {
+      background:#f0eeff; color:#4b40aa; border:1px solid #ded9ff; padding:12px 18px; font-size:14px; border-radius:12px; cursor:pointer; margin:5px; text-decoration:none;
+      display: inline-block;
+    }
+    #pdf-export-area {
+      position: absolute; left: -9999px; top: 0; width: 800px;
+      background: white; padding: 40px; font-family: Arial, sans-serif;
+    }
+    #totalVotes { color:var(--muted); font-weight:700; }
+    @media (max-width:820px) { body { padding:26px 16px 60px; } #setup { float:none; width:100%; position:static; margin-bottom:18px; } #question-form, #results { width:100%; margin-left:0; } .export-btn { margin-left:0; } }
+  </style>
+</head>
+<body>
+  <h1>📊 Сервис опросов (Прототип)</h1>
+
+  <div id="setup">
+    <p>Код сессии: <strong id="codeDisplay"></strong></p>
+    <canvas id="qrcode" width="250" height="250"></canvas>
+    <p>Отсканируйте QR-код или перейдите по ссылке:<br>
+      <a id="joinLink" href="#" target="_blank"></a>
+    </p>
+    <p>
+      <a id="displayLink" class="display-link-btn" href="#" target="_blank">🖥 Открыть экран демонстрации</a>
+    </p>
+  </div>
+
+  <div id="question-form">
+    <h3>Создать новый вопрос</h3>
+    <select id="questionType" onchange="toggleQuestionType()">
+      <option value="choice">Обычный опрос (выбор вариантов)</option>
+      <option value="wordcloud">Облако слов (свободный ввод)</option>
+    </select>
+    <br>
+    <input type="text" id="questionText" placeholder="Текст вопроса" size="40" value="Что для вас важно в сервисе?">
+    <br>
+    <div id="optionsInputContainer">
+      <input type="text" id="optionsText" placeholder="Варианты через запятую" size="40" value="Скорость,Дизайн,Надёжность,Поддержка">
+    </div>
+    <br>
+    <button onclick="createQuestion()">Задать вопрос</button>
+    <button onclick="resetQuestion()" style="background:#eee;">Сбросить</button>
+  </div>
+
+  <div id="results" style="display:none;">
+    <h2 id="activeQuestionTitle"></h2>
+    <div id="chartContainer"><canvas id="chart" width="400" height="300"></canvas></div>
+    <div id="wordcloudContainer" class="hidden"><div id="wordcloud-container"></div></div>
+    <p id="totalVotes"></p>
+    <button class="new-question-btn" onclick="prepareNewQuestion()">➕ Новый вопрос</button>
+  </div>
+
+  <button class="export-btn" onclick="exportToPDF()" style="display:none;" id="exportBtn">
+    📄 Скачать PDF со всеми результатами
+  </button>
+
+  <div id="pdf-export-area"></div>
+
+  <script>
+    const BASE_URL = window.location.origin;
+    let sessionCode = '';
+    let ws;
+    let chart;
+    let questionCount = 0;
+
+    (async function init() {
+      const res = await fetch(`${BASE_URL}/api/session`, { method: 'POST' });
+      const data = await res.json();
+      sessionCode = data.code;
+      document.getElementById('codeDisplay').textContent = sessionCode;
+      const joinUrl = `${BASE_URL}/join?session=${sessionCode}`;
+      document.getElementById('joinLink').href = joinUrl;
+      document.getElementById('joinLink').textContent = joinUrl;
+      document.getElementById('displayLink').href = `${BASE_URL}/display.html?session=${sessionCode}`;
+      QRCode.toCanvas(document.getElementById('qrcode'), joinUrl, { width: 250 }, (err) => {
+        if (err) console.error('QR ошибка:', err);
+      });
+      connectWebSocket();
+    })();
+
+    function connectWebSocket() {
+      const socketProtocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
+      ws = new WebSocket(`${socketProtocol}//${location.host}/ws?role=presenter&session=${sessionCode}`);
+      ws.onmessage = (event) => {
+        const msg = JSON.parse(event.data);
+        if (msg.type === 'results') {
+          if (msg.questionType === 'wordcloud') updateWordcloud(msg.results);
+          else updateChart(msg.results);
+        }
+      };
+      ws.onclose = () => setTimeout(connectWebSocket, 2000);
+    }
+
+    function toggleQuestionType() {
+      document.getElementById('optionsInputContainer').style.display = 
+        document.getElementById('questionType').value === 'choice' ? 'block' : 'none';
+    }
+
+    function prepareNewQuestion() {
+      document.getElementById('results').style.display = 'none';
+      document.getElementById('questionText').value = '';
+      document.getElementById('optionsText').value = 'Скорость,Дизайн,Надёжность,Поддержка';
+      document.getElementById('questionType').value = 'choice';
+      toggleQuestionType();
+    }
+
+    async function createQuestion() {
+      const question = document.getElementById('questionText').value.trim();
+      const questionType = document.getElementById('questionType').value;
+      if (!question) return alert('Введите текст вопроса');
+      let options = [];
+      if (questionType === 'choice') {
+        const optionsText = document.getElementById('optionsText').value.trim();
+        if (!optionsText) return alert('Введите варианты ответов');
+        options = optionsText.split(',').map(o => o.trim()).filter(o => o.length > 0);
+        if (options.length < 2) return alert('Нужно минимум 2 варианта');
+      }
+      const res = await fetch(`${BASE_URL}/api/question`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ code: sessionCode, question, type: questionType, options })
+      });
+      if (!res.ok) { const err = await res.json(); return alert(err.error || 'Ошибка сервера'); }
+      questionCount++;
+      document.getElementById('activeQuestionTitle').textContent = question;
+      document.getElementById('results').style.display = 'block';
+      document.getElementById('exportBtn').style.display = 'inline-block';
+      if (questionType === 'choice') {
+        document.getElementById('chartContainer').style.display = 'block';
+        document.getElementById('wordcloudContainer').classList.add('hidden');
+        initChart(options);
+      } else {
+        document.getElementById('chartContainer').style.display = 'none';
+        document.getElementById('wordcloudContainer').classList.remove('hidden');
+        document.getElementById('wordcloud-container').innerHTML = '<p style="color:#888;">Ожидаем ответы участников...</p>';
+        document.getElementById('totalVotes').textContent = '';
+      }
+    }
+
+    function initChart(labels) {
+      const ctx = document.getElementById('chart').getContext('2d');
+      if (chart) chart.destroy();
+      chart = new Chart(ctx, {
+        type: 'bar',
+        data: {
+          labels: labels,
+          datasets: [{
+            label: 'Голоса',
+            data: labels.map(() => 0),
+            backgroundColor: 'rgba(54, 162, 235, 0.7)',
+            borderColor: 'rgba(54, 162, 235, 1)',
+            borderWidth: 1
+          }]
+        },
+        options: {
+          scales: { y: { beginAtZero: true, ticks: { stepSize: 1 } } },
+          plugins: { legend: { display: false } }
+        }
+      });
+    }
+
+    function updateChart(results) {
+      if (!chart) return;
+      const labels = chart.data.labels;
+      const newData = labels.map(label => results[label] || 0);
+      chart.data.datasets[0].data = newData;
+      chart.update();
+      document.getElementById('totalVotes').textContent = `Всего ответов: ${newData.reduce((a, b) => a + b, 0)}`;
+    }
+
+    function updateWordcloud(words) {
+      if (!words || Object.keys(words).length === 0) {
+        document.getElementById('wordcloud-container').innerHTML = '<p style="color:#888;">Ожидаем ответы участников...</p>';
+        return;
+      }
+      const entries = Object.entries(words).sort((a, b) => b[1] - a[1]);
+      const maxCount = entries[0][1];
+      const total = entries.reduce((sum, [, count]) => sum + count, 0);
+      document.getElementById('wordcloud-container').innerHTML = entries.map(([word, count]) => {
+        const size = 14 + Math.floor((count / maxCount) * 40);
+        const opacity = 0.5 + (count / maxCount) * 0.5;
+        return `<span class="wordcloud-item" style="font-size:${size}px; opacity:${opacity};">${word} (${count})</span>`;
+      }).join('');
+      document.getElementById('totalVotes').textContent = `Всего ответов: ${total}`;
+    }
+
+    function resetQuestion() { location.reload(); }
+
+    async function exportToPDF() {
+      const exportBtn = document.getElementById('exportBtn');
+      exportBtn.textContent = '⏳ Генерируем PDF...';
+      exportBtn.disabled = true;
+      try {
+        const res = await fetch(`${BASE_URL}/api/session/${sessionCode}/history`);
+        const data = await res.json();
+        if (!data.questions || data.questions.length === 0) return alert('Нет вопросов для экспорта');
+        const exportArea = document.getElementById('pdf-export-area');
+        exportArea.innerHTML = `<h1>📊 Результаты опроса</h1><p>Код сессии: <strong>${sessionCode}</strong></p><p>Дата: ${new Date().toLocaleString('ru-RU')}</p><p>Всего вопросов: ${data.questions.length}</p><hr>` +
+          data.questions.map((q, i) => `<div class="pdf-question"><h3>Вопрос ${i+1}: ${q.question}</h3><p><em>Тип: ${q.type === 'wordcloud' ? 'Облако слов' : 'Выбор вариантов'}</em></p>${renderPDFQuestion(q)}<hr></div>`).join('');
+        await new Promise(resolve => setTimeout(resolve, 500));
+        const canvas = await html2canvas(exportArea, { scale: 2, useCORS: true, logging: false });
+        const { jsPDF } = window.jspdf;
+        const pdf = new jsPDF('p', 'mm', 'a4');
+        const imgWidth = 210, pageHeight = 297;
+        const imgHeight = (canvas.height * imgWidth) / canvas.width;
+        let heightLeft = imgHeight, position = 0;
+        pdf.addImage(canvas.toDataURL('image/png'), 'PNG', 0, 0, imgWidth, imgHeight);
+        heightLeft -= pageHeight;
+        while (heightLeft > 0) {
+          position = heightLeft - imgHeight;
+          pdf.addPage();
+          pdf.addImage(canvas.toDataURL('image/png'), 'PNG', 0, position, imgWidth, imgHeight);
+          heightLeft -= pageHeight;
+        }
+        pdf.save(`Опрос_${sessionCode}_${new Date().toISOString().slice(0,10)}.pdf`);
+      } catch (error) {
+        console.error('Ошибка экспорта:', error);
+        alert('Не удалось создать PDF. Проверьте консоль.');
+      } finally {
+        exportBtn.textContent = '📄 Скачать PDF со всеми результатами';
+        exportBtn.disabled = false;
+      }
+    }
+
+    function renderPDFQuestion(q) {
+      if (q.type === 'wordcloud') {
+        const words = q.answers || {};
+        if (Object.keys(words).length === 0) return '<p style="color:#999;">Нет ответов</p>';
+        const entries = Object.entries(words).sort((a, b) => b[1] - a[1]);
+        const maxCount = entries[0][1];
+        return `<div class="pdf-wordcloud">${entries.map(([word, count]) => {
+          const size = 12 + Math.floor((count / maxCount) * 24);
+          return `<span style="font-size:${size}px;">${word} (${count})</span>`;
+        }).join(' ')}</div>`;
+      } else {
+        const answers = q.answers || {};
+        const total = Object.values(answers).reduce((a, b) => a + b, 0) || 1;
+        const options = q.options || Object.keys(answers);
+        return options.map(opt => {
+          const count = answers[opt] || 0;
+          const percent = Math.round((count / total) * 100);
+          return `<div><strong>${opt}</strong>: ${count} голосов (${percent}%)<div style="background:#e0e0e0;height:20px;border-radius:3px;"><div style="width:${Math.max(percent*2,10)}px;height:20px;background:#2196f3;border-radius:3px;"></div></div></div>`;
+        }).join('');
+      }
+    }
+  </script>
+</body>
+</html>
