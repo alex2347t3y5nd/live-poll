@@ -1,0 +1,16 @@
+[Unit]
+Description=Live Poll realtime application
+After=network.target
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/live-poll
+Environment=NODE_ENV=production
+Environment=PORT=3000
+ExecStart=/usr/bin/node /opt/live-poll/server.js
+Restart=always
+RestartSec=5
+User=root
+
+[Install]
+WantedBy=multi-user.target
