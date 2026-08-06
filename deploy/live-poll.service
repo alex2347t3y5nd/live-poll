@@ -6,7 +6,7 @@ After=network.target
 Type=simple
 WorkingDirectory=/opt/live-poll
 Environment=NODE_ENV=production
-Environment=PORT=3000
+Environment=PORT=3100
 ExecStart=/usr/bin/node /opt/live-poll/server.js
 Restart=always
 RestartSec=5
